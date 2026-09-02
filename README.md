@@ -6,6 +6,7 @@ plus a browser client that discovers and calls them live.
 
 | | |
 |---|---|
+| **Live demo** | **https://eventos-mcp.vercel.app** |
 | **MCP endpoint** | `https://eventos-agent-fleet-502476192372.us-central1.run.app/mcp` |
 | **Tool manifest** | [`/mcp/manifest`](https://eventos-agent-fleet-502476192372.us-central1.run.app/mcp/manifest) |
 | **Transport** | Streamable HTTP, JSON-RPC 2.0 |
@@ -125,6 +126,8 @@ dependency on this app and can be lifted into any TypeScript project.
 and the upstream URL stays in server config. The fleet also sets permissive CORS
 and exposes `Mcp-Session-Id`, so pointing the client straight at the Cloud Run
 URL works too.
+
+Deployed at **https://eventos-mcp.vercel.app**. To run it locally:
 
 ```bash
 cd web
