@@ -122,6 +122,13 @@ argument form generated from each tool's JSON Schema. Every button issues a real
 session headers, SSE-or-JSON response parsing, typed errors. It has no
 dependency on this app and can be lifted into any TypeScript project.
 
+Every message the page exchanges with the fleet is recorded and shown in a
+**JSON-RPC wire log** at the bottom of the console: method, latency, and the
+raw request and response envelopes, expandable per exchange. Loading the page
+and calling one tool produces the whole MCP lifecycle — `initialize`,
+`notifications/initialized` (answered `202`, no body), `tools/list`,
+`tools/call` — so the protocol is inspectable rather than merely claimed.
+
 `web/app/api/mcp/route.ts` proxies to Cloud Run so the browser stays same-origin
 and the upstream URL stays in server config. The fleet also sets permissive CORS
 and exposes `Mcp-Session-Id`, so pointing the client straight at the Cloud Run

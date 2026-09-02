@@ -9,6 +9,7 @@ import {
   type InitializeResult,
   type McpTool,
   type ToolResult,
+  type WireExchange,
 } from "@/lib/mcp";
 
 /** Sensible starting arguments so a judge can click Call without typing. */
@@ -57,11 +58,15 @@ export default function Home() {
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [upstream, setUpstream] = useState<string | null>(null);
+  const [wire, setWire] = useState<WireExchange[]>([]);
+  const [openExchange, setOpenExchange] = useState<number | null>(null);
 
   // ── Connect: initialize, then discover tools ────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    const client = new McpClient("/api/mcp");
+    const client = new McpClient("/api/mcp", (exchange) =>
+      setWire((prev) => [exchange, ...prev].slice(0, 50)),
+    );
     clientRef.current = client;
 
     (async () => {
@@ -290,6 +295,47 @@ export default function Home() {
                     )}
                   </>
                 )}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-head">
+                <span className="panel-title">JSON-RPC wire log</span>
+                <span className="badge dim">{wire.length}</span>
+              </div>
+              <div className="panel-body">
+                {wire.length === 0 && (
+                  <div className="empty">Every message this page exchanges with the fleet appears here.</div>
+                )}
+                {wire.map((exchange) => (
+                  <div className="wire" key={exchange.seq}>
+                    <button
+                      className="wire-head"
+                      onClick={() =>
+                        setOpenExchange(openExchange === exchange.seq ? null : exchange.seq)
+                      }
+                    >
+                      <span className={`wire-status ${exchange.status}`} />
+                      <span className="wire-method">{exchange.method}</span>
+                      <span className="wire-spacer" />
+                      <span className="wire-ms">{exchange.ms} ms</span>
+                      <span className="wire-at">{exchange.at}</span>
+                      <span className="wire-caret">{openExchange === exchange.seq ? "−" : "+"}</span>
+                    </button>
+                    {openExchange === exchange.seq && (
+                      <div className="wire-body">
+                        <div className="section-label">→ request</div>
+                        <pre className="json">{JSON.stringify(exchange.request, null, 2)}</pre>
+                        <div className="section-label">← response</div>
+                        <pre className="json">
+                          {typeof exchange.response === "string"
+                            ? exchange.response
+                            : JSON.stringify(exchange.response, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </section>

@@ -277,3 +277,37 @@ input, textarea, select { font-family: inherit; }
 }
 .footer a { color: var(--muted); text-decoration: none; }
 .footer a:hover { color: var(--riptide); }
+
+/* ── JSON-RPC wire log ─────────────────────────────────────────────────── */
+
+.wire { border-bottom: 1px solid var(--line); }
+.wire:last-child { border-bottom: none; }
+
+.wire-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 10px 2px;
+  color: var(--bone);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+}
+.wire-head:hover { color: var(--riptide); }
+
+.wire-status { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.wire-status.ok { background: var(--riptide); }
+.wire-status.error { background: var(--red); }
+.wire-status.notification { background: var(--amber); }
+
+.wire-method { color: inherit; }
+.wire-spacer { flex: 1; }
+.wire-ms { color: var(--muted); font-size: 11px; }
+.wire-at { color: var(--dim); font-size: 11px; }
+.wire-caret { color: var(--dim); width: 12px; text-align: center; }
+
+.wire-body { padding: 4px 0 14px; }
+.wire-body .json { max-height: 300px; }

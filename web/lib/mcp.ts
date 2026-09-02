@@ -58,6 +58,17 @@ interface JsonRpcResponse<T> {
   error?: { code: number; message: string; data?: unknown };
 }
 
+/** One request/response pair on the wire, for protocol inspection. */
+export interface WireExchange {
+  seq: number;
+  method: string;
+  request: unknown;
+  response: unknown;
+  ms: number;
+  at: string;
+  status: "ok" | "error" | "notification";
+}
+
 /** A JSON-RPC error returned by the server, carrying the spec error code. */
 export class McpError extends Error {
   constructor(
@@ -75,7 +86,31 @@ export class McpClient {
   private sessionId: string | null = null;
   private negotiatedVersion: string = PROTOCOL_VERSION;
 
-  constructor(private readonly endpoint: string = "/api/mcp") {}
+  private wireSeq = 0;
+
+  constructor(
+    private readonly endpoint: string = "/api/mcp",
+    /** Called with every exchange, so a UI can show the raw protocol traffic. */
+    private readonly onExchange?: (exchange: WireExchange) => void,
+  ) {}
+
+  private record(
+    method: string,
+    request: unknown,
+    response: unknown,
+    ms: number,
+    status: WireExchange["status"],
+  ): void {
+    this.onExchange?.({
+      seq: ++this.wireSeq,
+      method,
+      request,
+      response,
+      ms: Math.round(ms),
+      at: new Date().toISOString().slice(11, 23),
+      status,
+    });
+  }
 
   get session(): string | null {
     return this.sessionId;
@@ -142,12 +177,21 @@ export class McpClient {
   }
 
   private async notify(method: string, params: Record<string, unknown> = {}): Promise<void> {
+    const message = { jsonrpc: "2.0", method, params };
+    const started = performance.now();
     try {
-      await fetch(this.endpoint, {
+      const response = await fetch(this.endpoint, {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+        body: JSON.stringify(message),
       });
+      this.record(
+        method,
+        message,
+        `HTTP ${response.status} — no body, as the spec requires for a notification`,
+        performance.now() - started,
+        "notification",
+      );
     } catch {
       // Notifications carry no response, so a transport hiccup here is not fatal.
     }
@@ -158,23 +202,40 @@ export class McpClient {
     params: Record<string, unknown>,
   ): Promise<{ body: T; headers: Headers }> {
     const id = this.nextId++;
+    const message = { jsonrpc: "2.0", id, method, params };
+    const started = performance.now();
 
-    const response = await fetch(this.endpoint, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-    });
-
-    const text = await response.text();
-
-    if (!text.trim()) {
-      throw new McpError(
-        response.status,
-        `Empty response from ${method} (HTTP ${response.status})`,
-      );
+    let response: Response;
+    try {
+      response = await fetch(this.endpoint, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(message),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.record(method, message, { transportError: detail }, performance.now() - started, "error");
+      throw new McpError(-32603, `Transport failure on ${method}: ${detail}`);
     }
 
-    const payload = parseResponse<T>(text, response.headers.get("Content-Type"));
+    const text = await response.text();
+    const elapsed = performance.now() - started;
+
+    if (!text.trim()) {
+      const detail = `Empty response from ${method} (HTTP ${response.status})`;
+      this.record(method, message, { httpStatus: response.status }, elapsed, "error");
+      throw new McpError(response.status, detail);
+    }
+
+    let payload: JsonRpcResponse<T>;
+    try {
+      payload = parseResponse<T>(text, response.headers.get("Content-Type"));
+    } catch (error) {
+      this.record(method, message, text.slice(0, 500), elapsed, "error");
+      throw error;
+    }
+
+    this.record(method, message, payload, elapsed, payload.error ? "error" : "ok");
 
     if (payload.error) {
       throw new McpError(payload.error.code, payload.error.message, payload.error.data);
