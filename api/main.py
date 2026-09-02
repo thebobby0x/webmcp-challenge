@@ -14,6 +14,8 @@ from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html
 from pydantic import BaseModel
 
 from registry.agent_registry import (
@@ -58,6 +60,7 @@ app = FastAPI(
     description="Fortified Enterprise Fleet of AI agents for event management. IMEX America Oct 12-15 2026.",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None,  # Custom /docs with nav bar — see custom_swagger_ui() below
 )
 
 # allow_origins=["*"] is deliberate: the MCP endpoint is a public, read-mostly
@@ -116,6 +119,31 @@ class FleetDeployRequest(BaseModel):
     fleet_name: str = "Untitled Fleet"
     agents: list[FleetAgentSpec] = []
     rationale: str = ""
+
+
+# ─── Custom /docs with site nav bar ──────────────────────────────────────────
+
+_NAV_BAR = """<header style="border-bottom:1px solid #2A272C;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;background:#0F0C0E;font-family:Archivo,sans-serif;gap:12px;flex-wrap:wrap">
+  <a href="/" style="font-size:16px;font-weight:700;letter-spacing:-0.5px;color:#F0ECF4;text-decoration:none">event<span style="color:#5DCBD1">OS</span> &middot; Agent Fleet</a>
+  <nav style="display:flex;gap:18px;align-items:center">
+    <a href="/ui"          style="color:#9D99A3;text-decoration:none;font-size:12px;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em">Agent Registry</a>
+    <a href="/ui/architect" style="color:#9D99A3;text-decoration:none;font-size:12px;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em">Architect</a>
+    <a href="/ui/demo"     style="color:#9D99A3;text-decoration:none;font-size:12px;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em">Live Demo</a>
+    <a href="/docs"        style="color:#F8BDD8;text-decoration:none;font-size:12px;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em">API Docs</a>
+    <a href="/mcp/manifest" style="color:#9D99A3;text-decoration:none;font-size:12px;font-family:'IBM Plex Mono',monospace;letter-spacing:.04em">MCP Manifest</a>
+  </nav>
+  <span style="background:rgba(93,203,209,.12);color:#5DCBD1;border:1px solid rgba(93,203,209,.3);border-radius:20px;padding:3px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace">WEBMCP CHALLENGE</span>
+</header>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">"""
+
+
+@app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
+async def custom_swagger_ui():
+    """Swagger UI with the site nav bar injected."""
+    base = get_swagger_ui_html(openapi_url="/openapi.json", title="eventOS Agent Fleet — API Docs")
+    html = base.body.decode()
+    html = html.replace("<body>", "<body>" + _NAV_BAR, 1)
+    return HTMLResponse(content=html, media_type="text/html")
 
 
 # ─── Registry Endpoints ───────────────────────────────────────────────────────
