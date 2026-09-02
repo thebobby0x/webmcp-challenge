@@ -1,501 +1,377 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { READY_EVENT, type RegistrationStatus } from "@/lib/webmcp";
 import {
-  McpClient,
-  McpError,
-  resultText,
-  toolAgent,
-  type InitializeResult,
-  type McpTool,
-  type ToolResult,
-  type WireExchange,
-} from "@/lib/mcp";
+  TOOLS,
+  TOOL_CARDS,
+  type WebMcpResult,
+  type WebMcpToolDescriptor,
+} from "@/lib/webmcp-tools";
 
-/** Sensible starting arguments so a judge can click Call without typing. */
-const PRESETS: Record<string, Record<string, string>> = {
-  // A prefix, not a full address: each exact email owns exactly one meeting,
-  // so prefix-matching an attendee cohort is what actually surfaces conflicts.
-  bookingagent_detect_conflicts: { attendee_id: "attendee_1" },
-  bookingagent_schedule_meeting: { attendee_id: "ATT-0001", meeting_type: "vendor" },
-  bookingagent_list_exhibitor_meetings: { exhibitor_id: "exhibitor_3@brand.com" },
-  insightagent_analyze_event: { focus: "overall" },
-  insightagent_unconfirmed_exhibitors: { region: "EMEA" },
-  commsagent_send_notification: {
-    attendee_id: "ATT-0001",
-    message: "Your 10:00 vendor meeting moved to 10:30, booth B-1042.",
-    priority: "high",
-  },
-  commsagent_escalate_to_human: { issue: "VIP attendee double-booked across two keynotes" },
-  commsagent_notification_history: { attendee_id: "ATT-0001" },
-  vendoragent_sla_breaches: {},
-  complianceagent_check_gdpr: {
-    data: '{\n  "name": "Jane Doe",\n  "email": "jane@corp.com",\n  "booth": "B-1042"\n}',
-  },
-  fleet_list_agents: {},
-  fleet_architect_design: {
-    event_name: "IMEX America 2026",
-    attendees: "12000",
-    exhibitors: "3500",
-    days: "3",
-    features: "badge scanning, VIP concierge, real-time floor routing",
-  },
-};
+const REPO = "https://github.com/thebobby0x/webmcp-challenge";
+const CHATGPT = "https://chatgpt.com/";
 
-type Status = "connecting" | "ready" | "error";
+interface RunState {
+  running: boolean;
+  ms: number | null;
+  result: WebMcpResult | null;
+  error: string | null;
+}
 
-export default function Home() {
-  const clientRef = useRef<McpClient | null>(null);
+const IDLE: RunState = { running: false, ms: null, result: null, error: null };
 
-  const [status, setStatus] = useState<Status>("connecting");
-  const [handshake, setHandshake] = useState<InitializeResult | null>(null);
-  const [tools, setTools] = useState<McpTool[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [args, setArgs] = useState<Record<string, string>>({});
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<ToolResult | null>(null);
-  const [calling, setCalling] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
-  const [banner, setBanner] = useState<string | null>(null);
-  const [upstream, setUpstream] = useState<string | null>(null);
-  const [wire, setWire] = useState<WireExchange[]>([]);
-  const [openExchange, setOpenExchange] = useState<number | null>(null);
+export default function Landing() {
+  const [status, setStatus] = useState<RegistrationStatus | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [args, setArgs] = useState<Record<string, Record<string, string>>>({});
+  const [runs, setRuns] = useState<Record<string, RunState>>({});
 
-  // ── Connect: initialize, then discover tools ────────────────────────────
+  // The provider in the root layout registers on mount and announces itself.
+  // It may well have fired before this component hydrated, so also read the
+  // status it parked on `window` rather than waiting on an event that is gone.
   useEffect(() => {
-    let cancelled = false;
-    const client = new McpClient("/api/mcp", (exchange) =>
-      setWire((prev) => [exchange, ...prev].slice(0, 50)),
-    );
-    clientRef.current = client;
+    const adopt = (next: RegistrationStatus) => setStatus(next);
+    const listener = (event: Event) => adopt((event as CustomEvent<RegistrationStatus>).detail);
 
-    (async () => {
-      try {
-        const info = await client.initialize();
-        const discovered = await client.listTools();
-        if (cancelled) return;
+    window.addEventListener(READY_EVENT, listener);
+    if (window.__eventosWebMCP) adopt(window.__eventosWebMCP);
 
-        setHandshake(info);
-        setTools(discovered);
-        setStatus("ready");
-        if (discovered.length > 0) selectTool(discovered[0]);
-      } catch (error) {
-        if (cancelled) return;
-        setStatus("error");
-        setBanner(describe(error));
-      }
-    })();
-
-    fetch("/api/mcp")
-      .then((r) => r.json())
-      .then((d) => !cancelled && setUpstream(d.upstream))
-      .catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-      void client.close();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.removeEventListener(READY_EVENT, listener);
   }, []);
 
-  const activeTool = useMemo(
-    () => tools.find((t) => t.name === selected) ?? null,
-    [tools, selected],
+  const argsFor = useCallback(
+    (tool: WebMcpToolDescriptor): Record<string, string> =>
+      args[tool.name] ?? TOOL_CARDS[tool.name]?.sample ?? {},
+    [args],
   );
 
-  const grouped = useMemo(() => {
-    const groups = new Map<string, McpTool[]>();
-    for (const tool of tools) {
-      const agent = toolAgent(tool);
-      groups.set(agent, [...(groups.get(agent) ?? []), tool]);
-    }
-    return [...groups.entries()];
-  }, [tools]);
+  const setArg = useCallback(
+    (toolName: string, key: string, value: string) =>
+      setArgs((prev) => ({
+        ...prev,
+        [toolName]: { ...(prev[toolName] ?? TOOL_CARDS[toolName]?.sample ?? {}), [key]: value },
+      })),
+    [],
+  );
 
-  function selectTool(tool: McpTool) {
-    setSelected(tool.name);
-    setArgs(PRESETS[tool.name] ?? {});
-    setFieldErrors({});
-    setResult(null);
-    setElapsed(null);
-    setBanner(null);
-  }
+  const run = useCallback(
+    async (tool: WebMcpToolDescriptor) => {
+      setRuns((prev) => ({ ...prev, [tool.name]: { ...IDLE, running: true } }));
+      const started = performance.now();
+      try {
+        // Deliberately routed through the registered surface rather than the
+        // imported function: this exercises the same path an agent would take.
+        const caller = window.__eventosWebMCP?.call;
+        const result = caller
+          ? await caller(tool.name, argsFor(tool))
+          : await tool.execute(argsFor(tool));
 
-  const call = useCallback(async () => {
-    const client = clientRef.current;
-    if (!client || !activeTool) return;
+        setRuns((prev) => ({
+          ...prev,
+          [tool.name]: { running: false, ms: Math.round(performance.now() - started), result, error: null },
+        }));
+      } catch (error) {
+        setRuns((prev) => ({
+          ...prev,
+          [tool.name]: {
+            running: false,
+            ms: Math.round(performance.now() - started),
+            result: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }));
+      }
+    },
+    [argsFor],
+  );
 
-    const { values, errors } = buildArguments(activeTool, args);
-    setFieldErrors(errors);
-    if (Object.keys(errors).length > 0) return;
-
-    setCalling(true);
-    setBanner(null);
-    setResult(null);
-    const started = performance.now();
-
-    try {
-      const response = await client.callTool(activeTool.name, values);
-      setResult(response);
-    } catch (error) {
-      setBanner(describe(error));
-    } finally {
-      setElapsed(Math.round(performance.now() - started));
-      setCalling(false);
-    }
-  }, [activeTool, args]);
+  const liveCount = useMemo(
+    () => TOOLS.filter((tool) => TOOL_CARDS[tool.name]?.backing === "live").length,
+    [],
+  );
 
   return (
     <>
       <header className="header">
         <div className="logo">
-          event<span>OS</span> · MCP Console
+          event<span>OS</span> · WebMCP
         </div>
         <div className="header-meta">
           <span className="badge">
-            <span className={`dot ${status === "ready" ? "on" : status === "error" ? "err" : "off"}`} />
-            {status === "ready" ? "connected" : status === "error" ? "disconnected" : "connecting"}
+            <span className={`dot ${status ? "on" : "off"}`} />
+            {status ? `${status.registered.length} tools registered` : "registering…"}
           </span>
-          {handshake && <span className="badge rosa">MCP {handshake.protocolVersion}</span>}
-          <span className="badge amber">IMEX America · Oct 12–15 2026</span>
+          {status && (
+            <span className={`badge ${status.native ? "rosa" : "dim"}`}>
+              {status.native ? status.surfaces[0] : "no WebMCP host — shim active"}
+            </span>
+          )}
+          <a className="badge amber link-badge" href="/console">
+            MCP console →
+          </a>
         </div>
       </header>
 
       <main className="main">
-        <section className="intro">
-          <h1>A five-agent event fleet, spoken to over MCP</h1>
-          <p>
-            This page is a Model Context Protocol client. It ran{" "}
-            <code>initialize</code> against the eventOS Agent Fleet on Cloud Run,
-            discovered its tools with <code>tools/list</code>, and every button below
-            issues a real <code>tools/call</code> over JSON-RPC 2.0. Nothing here is
-            mocked — the fleet is the same service that runs the event.
+        <section className="hero">
+          <div className="hero-copy">
+          <p className="eyebrow">WebMCP Challenge · browser-native tool calling</p>
+          <h1>
+            The event operations stack, <span className="accent">callable from the tab</span>.
+          </h1>
+          <p className="lede">
+            eventOS runs live events — 506 meetings, 200 exhibitors, 50 vendors on the floor at IMEX
+            America. This page registers six of its operations as WebMCP tools on{" "}
+            <code>document.modelContext</code>. An agent driving this browser discovers them the
+            moment the page loads and calls them in the user&rsquo;s own session: no API key, no
+            OAuth grant, no server the agent has to be told about.
+          </p>
+
+          <div className="hero-actions">
+            <a className="btn primary" href={CHATGPT} target="_blank" rel="noreferrer">
+              Try with ChatGPT
+            </a>
+            <a className="btn ghost" href="/console">
+              Open the MCP console
+            </a>
+            <a className="btn ghost" href={REPO} target="_blank" rel="noreferrer">
+              Source on GitHub
+            </a>
+          </div>
+          <p className="hero-note">
+            Open this URL in an agentic browser, then ask: <em>&ldquo;What tools does this page
+            offer? Check vendor status for IMEX and tell me what&rsquo;s at risk.&rdquo;</em> Or run any
+            tool yourself below — the buttons call through the registered surface, exactly as an
+            agent would.
+          </p>
+          </div>
+
+          <aside className="receipt" aria-label="Live registration state">
+            <div className="receipt-head">
+              <span className={`dot ${status ? "on" : "off"}`} />
+              registration
+            </div>
+            <dl className="receipt-rows">
+              <div>
+                <dt>surface</dt>
+                <dd className="mono">{status ? status.surfaces.join(", ") : "…"}</dd>
+              </div>
+              <div>
+                <dt>host</dt>
+                <dd className="mono">
+                  {status ? (status.native ? "native WebMCP" : "shim (no host detected)") : "…"}
+                </dd>
+              </div>
+              <div>
+                <dt>tools</dt>
+                <dd className="mono">{status ? status.registered.length : "…"}</dd>
+              </div>
+            </dl>
+            <ul className="receipt-tools">
+              {TOOLS.map((tool) => (
+                <li key={tool.name}>
+                  <span className={`tick${status?.registered.includes(tool.name) ? " on" : ""}`} />
+                  {tool.name}
+                </li>
+              ))}
+            </ul>
+            <p className="receipt-foot">
+              Verify in the console: <code>window.__eventosWebMCP</code>
+            </p>
+          </aside>
+        </section>
+
+        <section className="stats">
+          <Stat value="6" label="tools registered" />
+          <Stat value={String(liveCount)} label="backed by live agents" />
+          <Stat value="0" label="credentials required" />
+          <Stat value="document.modelContext" label="registration surface" mono />
+        </section>
+
+        <section>
+          <h2 className="section-heading">What this page publishes</h2>
+          <p className="section-sub">
+            Every tool returns a <code>content</code> block for the model plus{" "}
+            <code>structuredContent</code> for hosts that read it, and every payload carries a{" "}
+            <code>source</code> field — so an agent can tell a number measured by the live fleet from
+            one produced by the catalog model.
+          </p>
+
+          <div className="tool-grid">
+            {TOOLS.map((tool) => (
+              <ToolCard
+                key={tool.name}
+                tool={tool}
+                expanded={open === tool.name}
+                onToggle={() => setOpen(open === tool.name ? null : tool.name)}
+                args={argsFor(tool)}
+                onArg={(key, value) => setArg(tool.name, key, value)}
+                onRun={() => run(tool)}
+                state={runs[tool.name] ?? IDLE}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <h2 className="section-heading">How it fits together</h2>
+          <div className="arch">
+            <ArchStep
+              step="1"
+              title="The agent arrives"
+              body="No configuration step. The browser hands the agent whatever this page registered on document.modelContext during load."
+            />
+            <ArchStep
+              step="2"
+              title="Tools run in the tab"
+              body="execute() runs in the page, in the user's session. Three tools reach the live eventOS agent fleet over MCP through a same-origin proxy; three answer from the local catalog."
+            />
+            <ArchStep
+              step="3"
+              title="The fleet answers"
+              body="A five-agent fleet on Cloud Run — Booking, Insight, Comms, Vendor, Compliance — exposes 12 MCP tools over JSON-RPC 2.0. The console shows that traffic on the wire."
+            />
+          </div>
+          <p className="section-sub">
+            The same fleet is reachable as a conventional MCP server, and{" "}
+            <a href="/console">the console</a> drives it directly so you can read every JSON-RPC
+            frame. WebMCP is the layer that removes the setup: the browser is already authenticated,
+            so the page can just offer the tools.
           </p>
         </section>
 
-        <div className="conn">
-          <div className="conn-field">
-            <span className="conn-label">Server</span>
-            <span className="conn-value accent">
-              {handshake ? `${handshake.serverInfo.name} v${handshake.serverInfo.version}` : "—"}
-            </span>
-          </div>
-          <div className="conn-field">
-            <span className="conn-label">Protocol</span>
-            <span className="conn-value">{handshake?.protocolVersion ?? "—"}</span>
-          </div>
-          <div className="conn-field">
-            <span className="conn-label">Tools discovered</span>
-            <span className="conn-value">{tools.length || "—"}</span>
-          </div>
-          <div className="conn-spacer" />
-          <div className="conn-field">
-            <span className="conn-label">Endpoint</span>
-            <span className="conn-value">{upstream ?? "/api/mcp"}</span>
-          </div>
-        </div>
-
-        {banner && <div className="banner">{banner}</div>}
-
-        <div className="columns">
-          <aside className="panel">
-            <div className="panel-head">
-              <span className="panel-title">tools/list</span>
-              <span className="badge dim">{tools.length}</span>
-            </div>
-            {status === "connecting" && <div className="empty"><span className="spinner" />Handshaking…</div>}
-            {status === "error" && <div className="empty">Could not reach the fleet.</div>}
-            {grouped.map(([agent, agentTools]) => (
-              <div className="agent-group" key={agent}>
-                <div className="agent-group-label">{agent}</div>
-                {agentTools.map((tool) => (
-                  <button
-                    key={tool.name}
-                    className={`tool-item${tool.name === selected ? " selected" : ""}`}
-                    onClick={() => selectTool(tool)}
-                  >
-                    <div className="tool-item-name">{tool.name}</div>
-                    <div className="tool-item-title">{tool.title ?? ""}</div>
-                  </button>
-                ))}
-              </div>
-            ))}
-          </aside>
-
-          <section style={{ display: "grid", gap: 22 }}>
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">tools/call</span>
-                {activeTool && <span className="badge dim">{toolAgent(activeTool)}</span>}
-              </div>
-              <div className="panel-body">
-                {!activeTool && <div className="empty">Select a tool to inspect its schema.</div>}
-                {activeTool && (
-                  <>
-                    <div className="tool-name">{activeTool.name}</div>
-                    <p className="tool-desc">{activeTool.description}</p>
-
-                    <ArgumentForm
-                      tool={activeTool}
-                      values={args}
-                      errors={fieldErrors}
-                      onChange={(key, value) => setArgs((prev) => ({ ...prev, [key]: value }))}
-                    />
-
-                    <div className="actions">
-                      <button className="btn" onClick={call} disabled={calling || status !== "ready"}>
-                        {calling ? <><span className="spinner" />Calling…</> : "Call tool"}
-                      </button>
-                      <button
-                        className="btn ghost"
-                        onClick={() => selectTool(activeTool)}
-                        disabled={calling}
-                      >
-                        Reset
-                      </button>
-                      {elapsed !== null && !calling && <span className="hint">{elapsed} ms round trip</span>}
-                      {activeTool.name === "fleet_architect_design" && !calling && (
-                        <span className="hint">live LLM call · expect 15–30s</span>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">Result</span>
-                {result && (
-                  <span className={`badge ${result.isError ? "amber" : ""}`}>
-                    {result.isError ? "isError: true" : "ok"}
-                  </span>
-                )}
-              </div>
-              <div className="panel-body">
-                {!result && !calling && (
-                  <div className="empty">
-                    No call yet.
-                    <br />
-                    Pick a tool and hit <strong>Call tool</strong> to see the fleet respond.
-                  </div>
-                )}
-                {calling && <div className="empty"><span className="spinner" />Waiting on the fleet…</div>}
-                {result && !calling && (
-                  <>
-                    <div className="section-label">content[] · what a model reads</div>
-                    <div className={`result-summary${result.isError ? " error" : ""}`}>
-                      {resultText(result) || "(no text content)"}
-                    </div>
-                    {result.structuredContent !== undefined && (
-                      <>
-                        <div className="section-label">structuredContent · machine-readable payload</div>
-                        <pre className="json">{JSON.stringify(result.structuredContent, null, 2)}</pre>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-head">
-                <span className="panel-title">JSON-RPC wire log</span>
-                <span className="badge dim">{wire.length}</span>
-              </div>
-              <div className="panel-body">
-                {wire.length === 0 && (
-                  <div className="empty">Every message this page exchanges with the fleet appears here.</div>
-                )}
-                {wire.map((exchange) => (
-                  <div className="wire" key={exchange.seq}>
-                    <button
-                      className="wire-head"
-                      onClick={() =>
-                        setOpenExchange(openExchange === exchange.seq ? null : exchange.seq)
-                      }
-                    >
-                      <span className={`wire-status ${exchange.status}`} />
-                      <span className="wire-method">{exchange.method}</span>
-                      <span className="wire-spacer" />
-                      <span className="wire-ms">{exchange.ms} ms</span>
-                      <span className="wire-at">{exchange.at}</span>
-                      <span className="wire-caret">{openExchange === exchange.seq ? "−" : "+"}</span>
-                    </button>
-                    {openExchange === exchange.seq && (
-                      <div className="wire-body">
-                        <div className="section-label">→ request</div>
-                        <pre className="json">{JSON.stringify(exchange.request, null, 2)}</pre>
-                        <div className="section-label">← response</div>
-                        <pre className="json">
-                          {typeof exchange.response === "string"
-                            ? exchange.response
-                            : JSON.stringify(exchange.response, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+        {status && (status.errors.length > 0 || !status.native) && (
+          <section className="notice">
+            <strong>Registration detail.</strong>{" "}
+            {!status.native && (
+              <>
+                This browser exposes no WebMCP API, so eventOS installed a same-shape shim on{" "}
+                <code>document.modelContext</code> and registered into it. The tools below are fully
+                functional; a WebMCP-capable browser would pick up the identical registrations.{" "}
+              </>
+            )}
+            {status.errors.length > 0 && <>Errors: {status.errors.join("; ")}</>}
           </section>
-        </div>
+        )}
       </main>
 
       <footer className="footer">
-        eventOS Agent Fleet · MCP over Streamable HTTP ·{" "}
-        <a href={upstream?.replace("/mcp", "/mcp/manifest") ?? "#"} target="_blank" rel="noreferrer">
-          tool manifest
-        </a>
+        eventOS over WebMCP · six tools on <code>document.modelContext</code> ·{" "}
+        <a href={REPO} target="_blank" rel="noreferrer">
+          GitHub
+        </a>{" "}
+        ·{" "}
+        <a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
+          MIT
+        </a>{" "}
+        · <a href="/console">MCP console</a>
       </footer>
     </>
   );
 }
 
-// ── Argument form ─────────────────────────────────────────────────────────
-
-function ArgumentForm({
-  tool,
-  values,
-  errors,
-  onChange,
-}: {
-  tool: McpTool;
-  values: Record<string, string>;
-  errors: Record<string, string>;
-  onChange: (key: string, value: string) => void;
-}) {
-  const properties = tool.inputSchema.properties ?? {};
-  const required = new Set(tool.inputSchema.required ?? []);
-  const names = Object.keys(properties);
-
-  if (names.length === 0) {
-    return <p className="no-args">This tool takes no arguments.</p>;
-  }
-
+function Stat({ value, label, mono }: { value: string; label: string; mono?: boolean }) {
   return (
-    <div>
-      {names.map((name) => {
-        const schema = properties[name];
-        const value = values[name] ?? "";
-        const error = errors[name];
-        const isObject = schema.type === "object";
-
-        return (
-          <div className="field" key={name}>
-            <div className="field-head">
-              <span className="field-name">{name}</span>
-              <span className="field-type">
-                {schema.type === "array" ? "string[]" : schema.type ?? "any"}
-              </span>
-              {required.has(name) && <span className="field-req">required</span>}
-            </div>
-            {schema.description && <div className="field-desc">{schema.description}</div>}
-
-            {schema.enum ? (
-              <select
-                className="select"
-                value={value}
-                onChange={(e) => onChange(name, e.target.value)}
-              >
-                <option value="">— not set —</option>
-                {schema.enum.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            ) : isObject ? (
-              <textarea
-                className={`textarea${error ? " invalid" : ""}`}
-                value={value}
-                placeholder='{ "field": "value" }'
-                onChange={(e) => onChange(name, e.target.value)}
-              />
-            ) : (
-              <input
-                className={`input${error ? " invalid" : ""}`}
-                value={value}
-                placeholder={placeholderFor(schema.type)}
-                onChange={(e) => onChange(name, e.target.value)}
-              />
-            )}
-
-            {error && <div className="field-error">{error}</div>}
-          </div>
-        );
-      })}
+    <div className="stat">
+      <div className={`stat-value${mono ? " mono" : ""}`}>{value}</div>
+      <div className="stat-label">{label}</div>
     </div>
   );
 }
 
-function placeholderFor(type?: string): string {
-  if (type === "integer" || type === "number") return "0";
-  if (type === "array") return "comma, separated, values";
-  return "";
+function ArchStep({ step, title, body }: { step: string; title: string; body: string }) {
+  return (
+    <div className="arch-step">
+      <div className="arch-num">{step}</div>
+      <div>
+        <div className="arch-title">{title}</div>
+        <p className="arch-body">{body}</p>
+      </div>
+    </div>
+  );
 }
 
-/**
- * Turn the form's strings into typed JSON-RPC arguments, coercing each field to
- * the type its schema declares. Blank optional fields are dropped rather than
- * sent as empty strings, so the server applies its own defaults.
- */
-function buildArguments(
-  tool: McpTool,
-  raw: Record<string, string>,
-): { values: Record<string, unknown>; errors: Record<string, string> } {
-  const properties = tool.inputSchema.properties ?? {};
-  const required = new Set(tool.inputSchema.required ?? []);
-  const values: Record<string, unknown> = {};
-  const errors: Record<string, string> = {};
+function ToolCard({
+  tool,
+  expanded,
+  onToggle,
+  args,
+  onArg,
+  onRun,
+  state,
+}: {
+  tool: WebMcpToolDescriptor;
+  expanded: boolean;
+  onToggle: () => void;
+  args: Record<string, string>;
+  onArg: (key: string, value: string) => void;
+  onRun: () => void;
+  state: RunState;
+}) {
+  const card = TOOL_CARDS[tool.name];
+  const fields = Object.entries(tool.inputSchema.properties ?? {});
+  const required = tool.inputSchema.required ?? [];
 
-  for (const [name, schema] of Object.entries(properties)) {
-    const text = (raw[name] ?? "").trim();
+  const text =
+    state.result?.content?.map((block) => block.text).join("\n\n") ?? state.error ?? null;
 
-    if (!text) {
-      if (required.has(name)) errors[name] = "Required.";
-      continue;
-    }
+  return (
+    <article className={`tool-card${expanded ? " expanded" : ""}`}>
+      <button className="tool-card-head" onClick={onToggle} aria-expanded={expanded}>
+        <div>
+          <div className="tool-card-name">{tool.name}</div>
+          <div className="tool-card-headline">{card?.headline}</div>
+        </div>
+        <span className={`chip ${card?.backing === "live" ? "live" : ""}`}>
+          {card?.backing === "live" ? "live fleet" : "catalog"}
+        </span>
+      </button>
 
-    switch (schema.type) {
-      case "integer":
-      case "number": {
-        const parsed = Number(text);
-        if (!Number.isFinite(parsed)) {
-          errors[name] = "Must be a number.";
-        } else {
-          values[name] = schema.type === "integer" ? Math.trunc(parsed) : parsed;
-        }
-        break;
-      }
-      case "boolean":
-        values[name] = text.toLowerCase() === "true";
-        break;
-      case "array":
-        values[name] = text.split(",").map((v) => v.trim()).filter(Boolean);
-        break;
-      case "object":
-        try {
-          const parsed = JSON.parse(text);
-          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-            errors[name] = "Must be a JSON object.";
-          } else {
-            values[name] = parsed;
-          }
-        } catch {
-          errors[name] = "Not valid JSON.";
-        }
-        break;
-      default:
-        values[name] = text;
-    }
-  }
+      <p className="tool-card-desc">{tool.description}</p>
 
-  return { values, errors };
-}
+      <div className="schema-row">
+        {fields.length === 0 ? (
+          <span className="schema-none">no input</span>
+        ) : (
+          fields.map(([key, schema]) => (
+            <span key={key} className="schema-chip">
+              {key}
+              <em>{schema.type}</em>
+              {required.includes(key) && <b>required</b>}
+            </span>
+          ))
+        )}
+      </div>
 
-function describe(error: unknown): string {
-  if (error instanceof McpError) return `MCP error ${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return String(error);
+      {expanded && (
+        <div className="tool-runner">
+          {fields.map(([key, schema]) => (
+            <label key={key} className="runner-field">
+              <span className="runner-label">
+                {key}
+                {required.includes(key) && <b> *</b>}
+              </span>
+              <input
+                className="input"
+                value={args[key] ?? ""}
+                placeholder={schema.description}
+                onChange={(event) => onArg(key, event.target.value)}
+              />
+            </label>
+          ))}
+
+          <div className="runner-actions">
+            <button className="btn primary small" onClick={onRun} disabled={state.running}>
+              {state.running ? "Calling…" : "Call tool"}
+            </button>
+            {state.ms !== null && <span className="hint">{state.ms} ms</span>}
+            {state.result?.isError && <span className="hint err">isError: true</span>}
+          </div>
+
+          {text && <pre className={`json${state.error ? " err" : ""}`}>{text}</pre>}
+        </div>
+      )}
+    </article>
+  );
 }

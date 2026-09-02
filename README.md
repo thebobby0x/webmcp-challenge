@@ -1,21 +1,100 @@
-# eventOS over MCP
+# eventOS over WebMCP
 
-**WebMCP Challenge submission.** The [eventOS Agent Fleet](./EVENTOS.md) — five
-production event-operations agents — exposed to any MCP client as 12 tools,
-plus a browser client that discovers and calls them live.
+**WebMCP Challenge submission.** A live event-operations platform that publishes
+six of its operations as **WebMCP tools on `document.modelContext`**, callable by
+any agent driving the browser — no API key, no OAuth grant, no server the agent
+has to be told about. Three of the six are backed by a real five-agent
+[eventOS Agent Fleet](./EVENTOS.md) reachable over conventional MCP.
 
 | | |
 |---|---|
-| **Live demo** | **https://eventos-mcp.vercel.app** |
+| **Live WebMCP page** | **https://web-ebon-one-23.vercel.app** |
+| **WebMCP surface** | `document.modelContext.registerTool()` (6 tools) |
+| **MCP console** | [`/console`](https://web-ebon-one-23.vercel.app/console) — drives the fleet over raw JSON-RPC |
 | **MCP endpoint** | `https://eventos-agent-fleet-502476192372.us-central1.run.app/mcp` |
-| **Tool manifest** | [`/mcp/manifest`](https://eventos-agent-fleet-502476192372.us-central1.run.app/mcp/manifest) |
-| **Transport** | Streamable HTTP, JSON-RPC 2.0 |
-| **Protocol versions** | `2025-11-25`, `2025-06-18`, `2025-03-26` (negotiated) |
-| **Tools** | 12, across 5 agents + registry + architect |
+| **Transport (server MCP)** | Streamable HTTP, JSON-RPC 2.0 |
+| **License** | [MIT](./LICENSE) |
 
 ---
 
-## What this is
+## The WebMCP layer
+
+WebMCP inverts the usual integration. Instead of an agent being configured with a
+server, credentials and a tool catalogue, **the page it is already looking at
+tells it what it can do.** `web/lib/webmcp.ts` registers six tools during load;
+an agent driving the tab discovers them immediately and calls them in the user's
+own authenticated session.
+
+| Tool | Input | Returns | Backing |
+|---|---|---|---|
+| `get_event_sentiment` | `event_id` | Positive / neutral / negative signal counts, sentiment score, ranked themes | **live fleet** |
+| `list_events` | — | Every upcoming event with dates, venue, attendee and exhibitor counts, status | **live fleet** + catalog |
+| `get_event_pnl` | `event_id` | Revenue and cost lines, gross profit, margin, per-line budget variance, largest overruns | catalog |
+| `check_vendor_status` | `event_id` | Vendors checked in and on track, SLA-flagged by status and type, pending exhibitor approvals | **live fleet** |
+| `get_venue_info` | `venue_name` | venueSource registry record — halls, floor area, capacity, docks, power, wi-fi, contact, caveats | catalog |
+| `search_planners` | `query` | Ranked planner profiles matched on name, agency, city, title, specialty and language | catalog |
+
+**Every result carries a `source` field** — `live:eventos-agent-fleet`,
+`venueSource` or `catalog` — so an agent can tell a number measured by the live
+fleet from one produced by a model. The three live tools open one MCP session
+against the fleet and reuse it; `get_event_sentiment` scores *operational*
+sentiment from real KPIs (meeting confirmation rate, exhibitor readiness, vendor
+SLA state) and says so in a `method` field rather than passing derived signal off
+as survey data.
+
+Tools return the spec's `CallToolResult` shape — a `content` block for the model
+plus `structuredContent` for hosts that read it. Failures come back as a normal
+result with `isError: true` and a `hint`, not a thrown exception, so an agent can
+recover instead of dead-ending.
+
+### Registering
+
+```js
+document.modelContext.registerTool({
+  name: "check_vendor_status",
+  description: "Vendor readiness for an eventOS event …",
+  inputSchema: { type: "object", properties: { event_id: { type: "string", … } }, required: ["event_id"] },
+  execute: async ({ event_id }) => ({ content: [{ type: "text", text: … }], structuredContent: … }),
+});
+```
+
+The spec puts the API on `document.modelContext`; earlier drafts and some
+shipping builds put it on `navigator.modelContext`. `web/lib/webmcp.ts`
+registers against **every surface that exists**, so the page works in an agentic
+browser today and in the standardised one later without a code change. When no
+host API is present at all — a plain browser, or a judge opening the page in
+Safari — it installs a minimal same-shape shim on `document.modelContext` and
+says so on the page, rather than silently registering nothing.
+
+### Verifying
+
+Open the live page and check the console:
+
+```js
+window.__eventosWebMCP
+// { registered: ["get_event_sentiment", "list_events", "get_event_pnl",
+//                "check_vendor_status", "get_venue_info", "search_planners"],
+//   surfaces: ["document.modelContext"], native: true, errors: [] }
+
+await window.__eventosWebMCP.call("check_vendor_status", { event_id: "EVT-IMEX-26" })
+```
+
+Or ask an agent driving the tab: *"What tools does this page offer? Check vendor
+status for IMEX and tell me what's at risk."*
+
+### Files
+
+| Path | Role |
+|---|---|
+| `web/lib/webmcp-tools.ts` | The six tool descriptors — schemas and `execute` implementations |
+| `web/lib/webmcp.ts` | Surface detection, shim, registration, `window.__eventosWebMCP` |
+| `web/app/webmcp-provider.tsx` | Client component mounted in the root layout; registers on mount |
+| `web/lib/event-source.ts` | Event catalog, venueSource registry, planner directory, P&L model |
+| `web/app/page.tsx` | Landing page — live registration state and an inline runner for every tool |
+
+---
+
+## The fleet underneath
 
 The event fleet already existed: five Google ADK agents that detect scheduling
 conflicts, route attendee notifications, brief executives, chase vendor SLAs and
@@ -28,7 +107,7 @@ client drive software you already shipped.
 
 ---
 
-## The tools
+## The fleet's MCP tools
 
 | Tool | Agent | Does |
 |---|---|---|
@@ -111,9 +190,9 @@ from stateless clients such as curl and browser `fetch`.
 
 ---
 
-## The web client
+## The MCP console
 
-`web/` is a Next.js 15 app that is a genuine MCP client, not a REST wrapper. On
+`web/console` is a genuine MCP client, not a REST wrapper. On
 load it runs `initialize`, discovers tools with `tools/list`, and renders an
 argument form generated from each tool's JSON Schema. Every button issues a real
 `tools/call`.
@@ -134,12 +213,13 @@ and the upstream URL stays in server config. The fleet also sets permissive CORS
 and exposes `Mcp-Session-Id`, so pointing the client straight at the Cloud Run
 URL works too.
 
-Deployed at **https://eventos-mcp.vercel.app**. To run it locally:
+Deployed at **https://web-ebon-one-23.vercel.app/console**. To run the whole
+`web/` app locally:
 
 ```bash
 cd web
 npm install
-npm run dev            # http://localhost:3000
+npm run dev            # http://localhost:3000 — WebMCP page and /console
 ```
 
 Set `CLOUD_RUN_URL` to point at a different fleet.
@@ -162,4 +242,11 @@ python3 tests/mcp_conformance.py https://eventos-agent-fleet-502476192372.us-cen
 
 ## Stack
 
-Python 3.12 · FastAPI · Google ADK · Gemini · Cloud Run · Next.js 15 · TypeScript · Vercel
+Python 3.12 · FastAPI · Google ADK · Gemini · Cloud Run · Next.js 16 · React 19 ·
+TypeScript · Vercel · WebMCP (`document.modelContext`)
+
+---
+
+## License
+
+[MIT](./LICENSE) © 2026 studio0x
