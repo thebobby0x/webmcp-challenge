@@ -8,9 +8,9 @@ has to be told about. Three of the six are backed by a real five-agent
 
 | | |
 |---|---|
-| **Live WebMCP page** | **https://web-ebon-one-23.vercel.app** |
+| **Live WebMCP page** | **https://eventos-mcp.vercel.app** |
 | **WebMCP surface** | `document.modelContext.registerTool()` (6 tools) |
-| **MCP console** | [`/console`](https://web-ebon-one-23.vercel.app/console) — drives the fleet over raw JSON-RPC |
+| **MCP console** | [`/console`](https://eventos-mcp.vercel.app/console) — drives the fleet over raw JSON-RPC |
 | **MCP endpoint** | `https://eventos-agent-fleet-502476192372.us-central1.run.app/mcp` |
 | **Transport (server MCP)** | Streamable HTTP, JSON-RPC 2.0 |
 | **License** | [MIT](./LICENSE) |
@@ -58,13 +58,34 @@ document.modelContext.registerTool({
 });
 ```
 
-The spec puts the API on `document.modelContext`; earlier drafts and some
-shipping builds put it on `navigator.modelContext`. `web/lib/webmcp.ts`
-registers against **every surface that exists**, so the page works in an agentic
-browser today and in the standardised one later without a code change. When no
-host API is present at all — a plain browser, or a judge opening the page in
-Safari — it installs a minimal same-shape shim on `document.modelContext` and
-says so on the page, rather than silently registering nothing.
+The API is young and still moving: Chrome 146 shipped it on
+`navigator.modelContext`, the W3C explainer writes it as
+`document.modelContext`, and earlier drafts used `window.agent`.
+`web/lib/webmcp.ts` registers against **every surface that exists**, so the page
+works in an agentic browser today and in the standardised one later without a
+code change. Surfaces are deduplicated by object identity — a browser that
+aliases one object onto both `document` and `navigator` would otherwise get two
+registration passes and throw on every duplicate tool name.
+
+All six tools are declared `annotations: { readOnlyHint: true }`. None of them
+book, cancel, send or charge anything, and saying so lets a host call them
+without a confirmation prompt.
+
+Two cases the spec does not cover, both of which decide whether this works when
+someone opens the page cold:
+
+- **The host attaches after we do.** There is no event for a `modelContext`
+  appearing, and an agentic browser may inject it well after React has mounted.
+  The page watches for one for 60 seconds after load — polling twice a second,
+  plus on `visibilitychange` and `focus` — and registers into it the moment it
+  shows up, updating the badge in the header. Registration is not a single shot
+  at mount.
+- **No host at all** — a plain browser, or a judge opening the page in Safari.
+  A minimal same-shape shim goes on `document.modelContext` so the page's own
+  runner still works and a polyfill or headless harness has somewhere to look.
+  The shim is **branded**, so the detector never mistakes our own stand-in for a
+  real host: the page reports `native: false` and says "no WebMCP host — shim
+  active" rather than claiming support it does not have.
 
 ### Verifying
 
@@ -213,7 +234,7 @@ and the upstream URL stays in server config. The fleet also sets permissive CORS
 and exposes `Mcp-Session-Id`, so pointing the client straight at the Cloud Run
 URL works too.
 
-Deployed at **https://web-ebon-one-23.vercel.app/console**. To run the whole
+Deployed at **https://eventos-mcp.vercel.app/console**. To run the whole
 `web/` app locally:
 
 ```bash

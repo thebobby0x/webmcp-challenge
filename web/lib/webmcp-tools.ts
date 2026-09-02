@@ -49,6 +49,11 @@ export interface WebMcpToolDescriptor {
     >;
     required?: string[];
   };
+  /**
+   * Hints the host can act on. `readOnlyHint` lets an agent call the tool
+   * without stopping to confirm — true for every tool here, since all six read.
+   */
+  annotations?: { readOnlyHint?: boolean };
   execute: (input: Record<string, unknown>) => Promise<WebMcpResult>;
 }
 

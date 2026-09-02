@@ -7,7 +7,7 @@ const DESCRIPTION =
   "A live event operations platform that publishes six of its operations as WebMCP tools on document.modelContext: event sentiment, event list, P&L, vendor status, venue lookup and planner search. Three are backed by a live five-agent MCP fleet. No API key, no OAuth, no server setup — an agent driving the browser discovers and calls them in the user's own session.";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://web-ebon-one-23.vercel.app"),
+  metadataBase: new URL("https://eventos-mcp.vercel.app"),
   title: TITLE,
   description: DESCRIPTION,
   applicationName: "eventOS over WebMCP",
